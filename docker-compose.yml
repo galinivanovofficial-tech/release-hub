@@ -23,6 +23,17 @@ services:
     depends_on:
       postgres: { condition: service_healthy }
 
+  registry:
+    # Private container registry (the open-source "distribution" project, what Docker Hub runs on).
+    # In production it sits behind TLS and authentication; locally it's plain HTTP on localhost.
+    image: registry:2
+    restart: unless-stopped
+    ports: ["5001:5000"]          # host 5000 is taken by macOS AirPlay
+    environment:
+      REGISTRY_STORAGE_DELETE_ENABLED: "true"
+    volumes: [registry:/var/lib/registry]
+
 volumes:
   pgdata:
   artifacts:
+  registry:
