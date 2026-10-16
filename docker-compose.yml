@@ -1,0 +1,28 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: releasehub
+      POSTGRES_USER: releasehub
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U releasehub -d releasehub"]
+      interval: 5s
+      retries: 10
+
+  api:
+    build: { context: ., target: runtime }
+    restart: unless-stopped
+    environment:
+      ADMIN_TOKEN: ${ADMIN_TOKEN:?set ADMIN_TOKEN in .env}
+      DATABASE_URL: postgresql+psycopg://releasehub:${POSTGRES_PASSWORD}@postgres:5432/releasehub
+    volumes: [artifacts:/data/artifacts]
+    ports: ["8080:8000"]
+    depends_on:
+      postgres: { condition: service_healthy }
+
+volumes:
+  pgdata:
+  artifacts:
