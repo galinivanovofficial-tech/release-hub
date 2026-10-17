@@ -1,0 +1,66 @@
+# CI/CD for Release Hub
+#  - every push / pull request : lint + tests + build  (quality gate)
+#  - a version tag like v0.3.0 : publish the image to GitHub Container Registry (ghcr.io)
+name: CI/CD
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Lint, test, build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Lint + tests (the Dockerfile's test stage, same command as locally)
+        run: docker build --target test -t releasehub:test .
+
+      - name: Build the runtime image
+        run: docker build --target runtime -t releasehub:ci .
+
+  publish:
+    name: Publish release image
+    needs: test                                   # only if the test job passed
+    if: startsWith(github.ref, 'refs/tags/v')     # only for version tags
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write                             # allowed to push to ghcr.io
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: The tag must match the version in pyproject.toml
+        run: |
+          VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' pyproject.toml)
+          if [ "v$VERSION" != "$GITHUB_REF_NAME" ]; then
+            echo "Tag $GITHUB_REF_NAME does not match pyproject version v$VERSION"; exit 1
+          fi
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "IMAGE=ghcr.io/$(echo "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')/releasehub" >> "$GITHUB_ENV"
+
+      - name: Log in to GitHub Container Registry (token provided by GitHub, never stored in code)
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: Refuse to overwrite an existing version (releases are immutable)
+        run: |
+          if docker manifest inspect "$IMAGE:$VERSION" >/dev/null 2>&1; then
+            echo "$IMAGE:$VERSION is already published"; exit 1
+          fi
+
+      - name: Build and push
+        run: |
+          docker build --target runtime \
+            --label org.opencontainers.image.version="$VERSION" \
+            --label org.opencontainers.image.revision="$GITHUB_SHA" \
+            --label org.opencontainers.image.source="https://github.com/$GITHUB_REPOSITORY" \
+            -t "$IMAGE:$VERSION" -t "$IMAGE:latest" .
+          docker push "$IMAGE:$VERSION"
+          docker push "$IMAGE:latest"
+          echo "### Published \`$IMAGE:$VERSION\`" >> "$GITHUB_STEP_SUMMARY"
